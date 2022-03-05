@@ -1,16 +1,19 @@
+# dill for saving model
+from typing import Optional
+import dill
 # jax import
+import jax.random as random
 import jax.numpy as jnp
 from jax.numpy import DeviceArray
 # numpyro imports
 import numpyro
 import numpyro.distributions as dist
-
-numpyro.set_platform('cpu')
+from . infer import fit
 
 
 class ModelHandler:
     """
-    Represents a numpyro thermodynamic model.
+    Represents a numpyro thermodynamic model handler.
     Parameters
     ----------
     L: (int)
@@ -37,7 +40,11 @@ class ModelHandler:
         """
         return jnp.tanh(x)
 
-    def __call__(self, x: DeviceArray = None, y: DeviceArray = None, batch_size: int = None) -> DeviceArray:
+    def model(self, x: DeviceArray = None, y: DeviceArray = None,
+              batch_size: int = None) -> DeviceArray:
+        """
+        Numpyro model instance.
+        """
         L = self.L
         C = self.C
         D_H = self.D_H
@@ -110,3 +117,35 @@ class ModelHandler:
             batch_g = g[ind]
             return numpyro.sample("yhat", dist.Normal(
                 batch_g, sigma_obs).to_event(1), obs=batch_y)
+
+    # use the fit class as the ModelHandler instance
+    def fit(self, args, x: DeviceArray, y: DeviceArray, rng_key: Optional[int] = None):
+        if rng_key is None:
+            rng_key, rng_key_predict = random.split(random.PRNGKey(0))
+        self.method = args.method
+        print(rng_key)
+        if args.method == 'svi':
+            self.guide, self.svi_results = fit(
+                args=args, rng_key=rng_key, model=self.model).svi(x=x, y=y)
+            return self.guide, self.svi_results
+        if args.method == 'mcmc':
+            self.trace = fit(args=args, rng_key=rng_key,
+                             model=self.model).mcmc(x=x, y=y)
+            return self.trace
+
+    def save(self, filepath=None):
+        # This is not working need change.
+        self.filepath = filepath
+        print(f'Saving model to {self.filepath}')
+        output_dict = {}
+        if self.method == 'svi':
+            # output_dict['model'] = self.model
+            output_dict['guide'] = self.guide
+            output_dict['svi_params'] = self.svi_results.params
+            with open(self.filepath, 'wb') as handle:
+                dill.dump(output_dict, handle)
+        if self.method == 'mcmc':
+            output_dict['model'] = self.model
+            output_dict['trace'] = self.trace
+            with open(self.filepath, 'wb') as handle:
+                dill.dump(output_dict, handle)

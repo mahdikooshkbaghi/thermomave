@@ -9,6 +9,7 @@ import numpyro.optim as optim
 from numpyro.infer import NUTS, MCMC
 # jax imports
 from jax.numpy import DeviceArray
+import jax.numpy as jnp
 
 
 class fit():
@@ -24,6 +25,7 @@ class fit():
         self.batch_size = args.batch_size
         self.num_chains = args.num_chains
         self.step_size = args.step_size
+        self.learning_decay = args.learning_decay
 
     def svi(self, x, y):
         print('\nTraining using Stochastic Variational Inference\n')
@@ -31,7 +33,14 @@ class fit():
         start = time.time()
         guide = autoguide.AutoDelta(
             self.model, init_loc_fn=init_to_sample)
-        optimizer = optim.RMSProp(step_size=self.step_size)
+
+        # Initial learning rate
+        step_size = self.step_size
+        init_lr = self.step_size
+        if self.learning_decay is not None:
+            def step_size(i):
+                return init_lr * self.learning_decay**jnp.floor(i / 1_000)
+        optimizer = optim.RMSProp(step_size=step_size)
         svi = SVI(self.model, guide, optimizer, loss=Trace_ELBO())
 
         svi_result = svi.run(

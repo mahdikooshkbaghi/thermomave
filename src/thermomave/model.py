@@ -14,25 +14,35 @@ from . infer import fit
 class ModelHandler:
     """
     Represents a numpyro thermodynamic model handler.
+
     Parameters
     ----------
     L: (int)
         Length of each training sequence. Must be ``>= 1``.
+
     C: (int)
         Length of the alphabet in the sequence.
+
     D_H: (int)
         Number of nodes in the nonlinearity maps latent phenotype to
         measurements. Default = 20.
+
     kT: (float)
         Boltzmann constant. Default = 0.582 (room temperature).
 
+    ge_noise_model_type: (str)
+            Specifies the type of noise model the user wants to infer.
+            The possible choices allowed: ['Gaussian','Cauchy','SkewedT', 'Empirical']
+
     """
 
-    def __init__(self, L: int, C: int, D_H: int = 20, kT: float = 0.582):
+    def __init__(self, L: int, C: int, D_H: int = 20, kT: float = 0.582,
+                 ge_noise_model_type: str = 'Gaussian'):
         self.L = L
         self.D_H = D_H
         self.C = C
         self.kT = kT
+        self.ge_noise_model_type = ge_noise_model_type
 
     def nonlin(self, x):
         """
@@ -49,6 +59,7 @@ class ModelHandler:
         C = self.C
         D_H = self.D_H
         kT = self.kT
+
         # Initialize constant parameter for folding energy
         theta_f_0 = numpyro.sample(
             "theta_f_0", dist.Normal(loc=0, scale=1))
@@ -104,10 +115,9 @@ class ModelHandler:
         if y is not None:
             assert g.shape == y.shape, f"g has shape {g.shape}, y has shape {y.shape}"
 
-        # Gamma noise with concentraion and rate parameters
-        # alpha = numpyro.sample('alpha', dist.Uniform(0.5, 5))
-        # beta = numpyro.sample('beta', dist.Uniform(0.5, 2))
-        noise = numpyro.sample("noise", dist.Gamma(3.0, 1.0))
+        # noise = numpyro.sample("noise", dist.Gamma(3.0, 1.0))
+        self.alpha, self.beta, noise = self.noise_model(
+            self.ge_noise_model_type)
         sigma_obs = 1.0 / jnp.sqrt(noise)
         with numpyro.plate("data", x.shape[0], subsample_size=batch_size) as ind:
             if y is not None:
@@ -118,12 +128,26 @@ class ModelHandler:
             return numpyro.sample("yhat", dist.Normal(
                 batch_g, sigma_obs).to_event(1), obs=batch_y)
 
+    def noise_model(self, ge_noise_model_type):
+        """
+        Define the Global Epistasis Noise Model.
+        """
+
+        # Check the ge_noise_model_type is in the list of implemented one.
+        error_mess = f"ge_noise_model_type should be 'Gamma' "
+        assert ge_noise_model_type in ['Gamma'], error_mess
+
+        # Gamma noise model
+        if ge_noise_model_type == 'Gamma':
+            alpha = numpyro.sample('alpha', dist.Uniform(0.5, 5))
+            beta = numpyro.sample('beta', dist.Uniform(0.5, 2))
+            return alpha, beta, numpyro.sample("noise", dist.Gamma(alpha, beta))
     # use the fit class as the ModelHandler instance
+
     def fit(self, args, x: DeviceArray, y: DeviceArray, rng_key: Optional[int] = None):
         if rng_key is None:
             rng_key, rng_key_predict = random.split(random.PRNGKey(0))
         self.method = args.method
-        print(rng_key)
         if args.method == 'svi':
             self.guide, self.svi_results = fit(
                 args=args, rng_key=rng_key, model=self.model).svi(x=x, y=y)

@@ -1,5 +1,4 @@
 # standard import
-from typing import Optional
 import time
 # numpyro imports
 from numpyro.infer import SVI, autoguide
@@ -20,33 +19,98 @@ class fit():
 
         self.rng_key = rng_key
         self.model = model
-        self.num_samples = args.num_samples
-        self.num_warmup = args.num_warmup
-        self.batch_size = args.batch_size
-        self.num_chains = args.num_chains
-        self.step_size = args.step_size
-        self.learning_decay = args.learning_decay
 
-    def svi(self, x, y):
+        error_samp = f"number of samples for mcmc/svi inference should be provided as args"
+        # Assign number of samples for inference.
+        assert args.num_samples != None, error_samp
+        self.num_samples = args.num_samples
+
+        # Assign parameters for the MCMC inference
+        if args.method == 'mcmc':
+            error_warm = f"number of warmup steps for mcmc inference should be provided as args"
+            error_chain = f"number of chains for mcmc inference should be provided as args"
+
+            # Assign number of warmup steps for MCMC inference.
+            assert args.num_warmup != None, error_warm
+            self.num_warmup = args.num_warmup
+
+            # Assign number of chains for MCMC inference.
+            assert args.num_chains != None, error_chain
+            self.num_chains = args.num_chains
+
+        # Assign parameters for the SVI inference.
+        if args.method == 'svi':
+            # Assign the learning rate
+            learning_rate = getattr(args, 'learning_rate', None)
+            if learning_rate == None:
+                self.step_size = 1e-1
+                print('\nDefault Learning rate = 1e-1 is used')
+            else:
+                self.step_size = learning_rate
+            # Assign the batch size
+            batch_size = getattr(args, 'batch_size', None)
+            if batch_size == None:
+                self.batch_size = 128
+                print('\nDefault batch size = 128 is used')
+            else:
+                self.batch_size = batch_size
+
+            # Assign Learning rate decay
+            learning_decay = getattr(args, 'learning_decay', None)
+            if learning_decay == None:
+                self.learning_decay = None
+            else:
+                self.learning_decay = learning_decay
+
+    def svi(self, x: DeviceArray, y: DeviceArray):
+        """
+        Stochastic Variational Inference.
+
+        Parameters
+        ----------
+        x: (DeviceArray):
+            Input features for training.
+        y: (DeviceArray):
+            Output (measurements) for training.
+
+        Returns
+        -------
+        guide: (numpyro.infer.autoguide.AutoDelta):
+            Numpyro Automatic Guide Generated.
+
+        svi_results: (SVIRunResult)
+            Stochastic Variational Inference Result.
+        """
+
         print('\nTraining using Stochastic Variational Inference\n')
-        # helper function for running SVI with a particular autoguide
         start = time.time()
+
+        # Assign Autodelta Autoguide.
         guide = autoguide.AutoDelta(
             self.model, init_loc_fn=init_to_sample)
 
         # Initial learning rate
         step_size = self.step_size
         init_lr = self.step_size
+
+        # Reduce learning rate based on the rate in learning decay for
+        # every 1000 epochs
         if self.learning_decay is not None:
             def step_size(i):
                 return init_lr * self.learning_decay**jnp.floor(i / 1_000)
+
+        # Define the optimizer
         optimizer = optim.RMSProp(step_size=step_size)
+
+        # Loss function is the ELBO
         svi = SVI(self.model, guide, optimizer, loss=Trace_ELBO())
 
-        svi_result = svi.run(
-            rng_key=self.rng_key, num_steps=self.num_samples, x=x, y=y, batch_size=self.batch_size)
+        svi_results = svi.run(
+            rng_key=self.rng_key, num_steps=self.num_samples,
+            x=x, y=y, batch_size=self.batch_size)
+
         print("\nVariational inference elapsed time:", time.time() - start)
-        return guide, svi_result
+        return guide, svi_results
 
     def mcmc(self, x, y):
         print('\nTraining using MCMC\n')

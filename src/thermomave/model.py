@@ -1,6 +1,7 @@
-# dill for saving model
 from typing import Optional
+# dill for saving model
 import dill
+import pandas as pd
 # jax import
 import jax.random as random
 import jax.numpy as jnp
@@ -15,6 +16,38 @@ class ModelHandler:
     """
     Represents a numpyro thermodynamic model handler.
 
+    The construction of the model is based on two dataframes: sate_df and energy_df.
+
+    state_df: 
+    Must includes the 'States' and 'Activity' columns. It should include the 
+    name of the energy as we want to have in the model and the corresponding coefficients for
+    each state. These coefficients define the functional form of the energy as a linear combination
+    between them.
+    Example (state_df): Here is the state_df for sorsteq model.
+
+    | State    | Activity | G_R | G_C | G_I |
+    | -------- | -------- | --- | --- | --- |
+    | Empty    | 0        | 0   | 0   | 0   |
+    | CRP      | 0        | 0   | 1   | 0   |
+    | RNAP     | 1        | 1   | 0   | 0   |
+    | RNAP+CRP | 1        | 1   | 1   | 1   |
+
+    energy_df: 
+    This dataframe provide the `Type` of energy as well as 
+    starting `Start` and stopping `Stop` location that the molecule for that 
+    specific energy is binding.
+
+    Example (energy_df): Here is the state_df for sorsteq model.
+    G_C: CRP energy.
+    G_R: RNAP energy.
+    G_I: Interaction energy.
+
+    | Energies     | Type     | Start | Stop |
+    | ------------ | -------- | ----- | ---- |
+    | G_C          | additive | 1     | 27   |
+    | G_R          | additive | 34    | 75   |
+    | G_I          | scalar   | NA    | NA   |
+
     Parameters
     ----------
     L: (int)
@@ -22,6 +55,12 @@ class ModelHandler:
 
     C: (int)
         Length of the alphabet in the sequence.
+
+    state_df: (pd.Dataframe)
+            The state dataframe.
+
+    energy_df: (pd.Dataframe)
+            The energy dataframe.
 
     D_H: (int)
         Number of nodes in the nonlinearity maps latent phenotype to
@@ -36,12 +75,25 @@ class ModelHandler:
 
     """
 
-    def __init__(self, L: int, C: int, D_H: int = 20, kT: float = 0.582,
+    def __init__(self, L: int, C: int,
+                 state_df: pd.Dataframe,
+                 energy_df: pd.Dataframe,
+                 D_H: int = 20, kT: float = 0.582,
                  ge_noise_model_type: str = 'Gaussian'):
+
+        # Assing the sequence length.
         self.L = L
-        self.D_H = D_H
+        # Assing the alphabet length.
         self.C = C
+        # Assign the state_df to the layer.
+        self.state_df = state_df
+        # Assign the energy_df to the layer.
+        self.energy_df = energy_df
+        # Assign the number of hidden nodes in the GE regression.
+        self.D_H = D_H
+        # Assign the Boltzmann constant.
         self.kT = kT
+        # Assign the ge noise model type.
         self.ge_noise_model_type = ge_noise_model_type
 
     def nonlin(self, x):
@@ -60,32 +112,51 @@ class ModelHandler:
         D_H = self.D_H
         kT = self.kT
 
-        # Initialize constant parameter for folding energy
-        theta_f_0 = numpyro.sample(
-            "theta_f_0", dist.Normal(loc=0, scale=1))
+        # Get list of energy names
+        energy_list = self.energy_df['Energies'].values
 
-        # Initialize constant parameter for binding energy
-        theta_b_0 = numpyro.sample(
-            "theta_b_0", dist.Normal(loc=0, scale=1))
+        for eng_name in energy_list:
+            # Find the corresponding row in the energy_df
+            ix = self.energy_df[self.energy_df['Energies'] == eng_name]
+            # Find the type of energy to assign the theta.
+            # There are two options 1. additive 2. scalar.
+            eng_type = ix['Type'].values
 
-        # Initialize additive parameter for folding energy
-        theta_f_lc = numpyro.sample(
-            "theta_f_lc", dist.Normal(loc=jnp.zeros((L, C)),
-                                      scale=jnp.ones((L, C))))
+            # Additive parameters
+            if eng_type == 'additive':
+                # Find the starting position on the sequence
+                start_idx = int(ix['Start'].values)
+                # Find the stopping position on the sequence
+                stop_idx = int(ix['Stop'].values)
+                # Find the length of interest on the sequence
+                l_lc = int(ix['l_lc'].values)
+                # Find the shape of theta_lc
+                theta_lc_shape = int(ix['l_lc'].values)
 
-        # Initialize additive parameter for binding energy
-        theta_b_lc = numpyro.sample(
-            "theta_b_lc", dist.Normal(loc=jnp.zeros((L, C)),
-                                      scale=jnp.ones((L, C))))
+                # Create the theta_0 name: insert theta_0 to the begining of the energy names
+                theta_0_name = f'theta_0_{eng_name}'
+                # Prior on the theta_0
+                theta_0 = numpyro.sample(
+                    theta_0_name, dist.Normal(loc=0, scale=1))
+                # Create the theta_lc name: insert theta_lc to the begining of the energy names
+                theta_lc_name = f'theta_lc_{eng_name}'
+                # Prior on the theta_lc
+                theta_lc = numpyro.sample(theta_lc_name, dist.Normal(loc=jnp.zeros((theta_lc_shape, C)),
+                                                                     scale=jnp.ones((theta_lc_shape, C))))
 
-        # Compute Delta G for binding
-        Delta_G_f = numpyro.deterministic(
-            "Delta_G_f", theta_f_0 + jnp.einsum('ij,kij->k', theta_f_lc, x))
-        Delta_G_f = Delta_G_f[..., jnp.newaxis]
-        # Compute Delta G for folding
-        Delta_G_b = numpyro.deterministic(
-            "Delta_G_b", theta_b_0 + jnp.einsum('ij,kij->k', theta_b_lc, x))
-        Delta_G_b = Delta_G_b[..., jnp.newaxis]
+                x_eng = x[:, C * start_idx:C * stop_idx]
+                x_lc = jnp.reshape(x_eng, [-1, l_lc, C])
+                Delta_G_name = f'Delta_G_{eng_name}'
+                Delta_G = numpyro.deterministic(
+                    Delta_G_name, theta_0 + jnp.einsum('ij,kij->k', theta_lc, x_lc))
+                Delta_G = Delta_G[..., jnp.newaxis]
+
+            # Scalar parameters
+            if eng_type == 'scalar':
+                theta_0_name = f'theta_0{eng_name}'
+                # Prior on the theta_0
+                theta_0 = numpyro.sample(
+                    theta_0_name, dist.Normal(loc=0, scale=1))
 
         # Compute and return fraction folded and bound
         Z = numpyro.deterministic(

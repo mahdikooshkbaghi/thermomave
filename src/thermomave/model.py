@@ -263,10 +263,8 @@ class ModelHandler:
 
         # Gamma noise model
         if ge_noise_model_type == 'Gamma':
-            # alpha = numpyro.sample('alpha', dist.Uniform(0.5, 5))
-            # beta = numpyro.sample('beta', dist.Uniform(0.5, 2))
-            alpha = 3
-            beta = 1
+            alpha = numpyro.sample('alpha', dist.Uniform(0.5, 5))
+            beta = numpyro.sample('beta', dist.Uniform(0.5, 2))
             return alpha, beta, numpyro.sample("noise", dist.Gamma(alpha, beta))
     # use the fit class as the ModelHandler instance
 

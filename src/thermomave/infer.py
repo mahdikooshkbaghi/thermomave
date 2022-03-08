@@ -19,6 +19,7 @@ class fit():
 
         self.rng_key = rng_key
         self.model = model
+        self.device = args.device
 
         error_samp = f"number of samples for mcmc/svi inference should be provided as args"
         # Assign number of samples for inference.
@@ -121,7 +122,8 @@ class fit():
         mcmc = MCMC(kernel,
                     num_warmup=self.num_warmup,
                     num_samples=self.num_samples,
-                    num_chains=self.num_chains)
+                    num_chains=self.num_chains,
+                    progress_bar=False if self.device is 'gpu' else True)
         # run mcmc inference
         mcmc.run(self.rng_key, x=x, y=y)
         print("\nMCMC elapsed time:", time.time() - start)

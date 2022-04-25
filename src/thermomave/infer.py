@@ -19,7 +19,6 @@ class fit():
 
         self.rng_key = rng_key
         self.model = model
-        self.device = args.device
 
         error_samp = f"number of samples for mcmc/svi inference should be provided as args"
         # Assign number of samples for inference.
@@ -63,6 +62,13 @@ class fit():
             else:
                 self.learning_decay = learning_decay
 
+        # Progress bar. For large data, gpu, multiple chains sometimes bar make it slow
+        progress_bar = getattr(args, 'progress_bar', None)
+        if progress_bar == None:
+            self.progress_bar = True
+        else:
+            self.progress_bar = args.progress_bar
+
     def svi(self, x: DeviceArray, y: DeviceArray):
         """
         Stochastic Variational Inference.
@@ -87,7 +93,7 @@ class fit():
         start = time.time()
 
         # Assign Autodelta Autoguide.
-        guide = autoguide.AutoDelta(
+        guide = autoguide.AutoNormal(
             self.model, init_loc_fn=init_to_sample)
 
         # Initial learning rate
@@ -108,7 +114,8 @@ class fit():
 
         svi_results = svi.run(
             rng_key=self.rng_key, num_steps=self.num_samples,
-            x=x, y=y, batch_size=self.batch_size)
+            x=x, y=y, batch_size=self.batch_size,
+            progress_bar=self.progress_bar)
 
         print("\nVariational inference elapsed time:", time.time() - start)
         return guide, svi_results
@@ -123,7 +130,7 @@ class fit():
                     num_warmup=self.num_warmup,
                     num_samples=self.num_samples,
                     num_chains=self.num_chains,
-                    progress_bar=False if self.device is 'gpu' else True)
+                    progress_bar=self.progress_bar)
         # run mcmc inference
         mcmc.run(self.rng_key, x=x, y=y)
         print("\nMCMC elapsed time:", time.time() - start)

@@ -226,16 +226,15 @@ class ModelHandler:
         # GE parameters
         a = numpyro.sample("a", dist.Normal(loc=0, scale=1))
         b = numpyro.sample("b", dist.Normal(
-            jnp.zeros((D_H, 1)), jnp.ones((D_H, 1))))
+            jnp.zeros((1, D_H)), jnp.ones((1, D_H))))
         c = numpyro.sample("c", dist.Normal(
-            jnp.zeros((D_H, 1)), jnp.ones((D_H, 1))))
+            jnp.zeros((1, D_H)), jnp.ones((1, D_H))))
         d = numpyro.sample("d", dist.Normal(
-            jnp.zeros((D_H, )), jnp.ones((D_H, ))))
+            jnp.zeros((1, D_H)), jnp.ones((1, D_H))))
 
         # GE regression
-        tmp = jnp.einsum('ij, kj->ki', c, phi)
-        g = numpyro.deterministic(
-            "g", a + jnp.einsum('ij, ki->kj', b, self.nonlin(tmp + d[None, :])))
+        g = a + jnp.sum(b * self.nonlin(c * phi + d), axis=1)
+        g = g[..., jnp.newaxis]
         if y is not None:
             assert g.shape == y.shape, f"g has shape {g.shape}, y has shape {y.shape}"
 
